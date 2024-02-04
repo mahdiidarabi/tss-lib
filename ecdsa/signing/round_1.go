@@ -11,22 +11,21 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/binance-chain/tss-lib/common"
-	"github.com/binance-chain/tss-lib/crypto"
-	"github.com/binance-chain/tss-lib/crypto/commitments"
-	"github.com/binance-chain/tss-lib/crypto/mta"
-	"github.com/binance-chain/tss-lib/ecdsa/keygen"
-	"github.com/binance-chain/tss-lib/tss"
+	"github.com/bnb-chain/tss-lib/v2/common"
+	"github.com/bnb-chain/tss-lib/v2/crypto"
+	"github.com/bnb-chain/tss-lib/v2/crypto/commitments"
+	"github.com/bnb-chain/tss-lib/v2/crypto/mta"
+	"github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
+	"github.com/bnb-chain/tss-lib/v2/tss"
 )
 
-var (
-	zero = big.NewInt(0)
-)
+var zero = big.NewInt(0)
 
 // round 1 represents round 1 of the signing part of the GG18 ECDSA TSS spec (Gennaro, Goldfeder; 2018)
-func newRound1(params *tss.Parameters, key *keygen.LocalPartySaveData, data *common.SignatureData, temp *localTempData, out chan<- tss.Message, end chan<- common.SignatureData) tss.Round {
+func newRound1(params *tss.Parameters, key *keygen.LocalPartySaveData, data *common.SignatureData, temp *localTempData, out chan<- tss.Message, end chan<- *common.SignatureData) tss.Round {
 	return &round1{
-		&base{params, key, data, temp, out, end, make([]bool, len(params.Parties().IDs())), false, 1}}
+		&base{params, key, data, temp, out, end, make([]bool, len(params.Parties().IDs())), false, 1},
+	}
 }
 
 func (round *round1) Start() *tss.Error {
@@ -45,12 +44,18 @@ func (round *round1) Start() *tss.Error {
 	round.number = 1
 	round.started = true
 	round.resetOK()
+	round.temp.ssidNonce = new(big.Int).SetUint64(0)
+	ssid, err := round.getSSID()
+	if err != nil {
+		return round.WrapError(err)
+	}
+	round.temp.ssid = ssid
 
-	k := common.GetRandomPositiveInt(round.Params().EC().Params().N)
-	gamma := common.GetRandomPositiveInt(round.Params().EC().Params().N)
+	k := common.GetRandomPositiveInt(round.Rand(), round.EC().Params().N)
+	gamma := common.GetRandomPositiveInt(round.Rand(), round.EC().Params().N)
 
 	pointGamma := crypto.ScalarBaseMult(round.Params().EC(), gamma)
-	cmt := commitments.NewHashCommitment(pointGamma.X(), pointGamma.Y())
+	cmt := commitments.NewHashCommitment(round.Rand(), pointGamma.X(), pointGamma.Y())
 	round.temp.k = k
 	round.temp.gamma = gamma
 	round.temp.pointGamma = pointGamma
@@ -63,7 +68,7 @@ func (round *round1) Start() *tss.Error {
 		if j == i {
 			continue
 		}
-		cA, pi, err := mta.AliceInit(round.Params().EC(), round.key.PaillierPKs[i], k, round.key.NTildej[j], round.key.H1j[j], round.key.H2j[j])
+		cA, pi, err := mta.AliceInit(round.Params().EC(), round.key.PaillierPKs[i], k, round.key.NTildej[j], round.key.H1j[j], round.key.H2j[j], round.Rand())
 		if err != nil {
 			return round.WrapError(fmt.Errorf("failed to init mta: %v", err))
 		}
@@ -120,6 +125,15 @@ func (round *round1) prepare() error {
 	xi := round.key.Xi
 	ks := round.key.Ks
 	bigXs := round.key.BigXj
+
+	if round.temp.keyDerivationDelta != nil {
+		// adding the key derivation delta to the xi's
+		// Suppose x has shamir shares x_0,     x_1,     ..., x_n
+		// So x + D has shamir shares  x_0 + D, x_1 + D, ..., x_n + D
+		mod := common.ModInt(round.Params().EC().Params().N)
+		xi = mod.Add(round.temp.keyDerivationDelta, xi)
+		round.key.Xi = xi
+	}
 
 	if round.Threshold()+1 > len(ks) {
 		return fmt.Errorf("t+1=%d is not satisfied by the key count of %d", round.Threshold()+1, len(ks))
