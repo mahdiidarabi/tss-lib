@@ -11,18 +11,20 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/binance-chain/tss-lib/common"
-	"github.com/binance-chain/tss-lib/crypto"
-	cmt "github.com/binance-chain/tss-lib/crypto/commitments"
-	"github.com/binance-chain/tss-lib/crypto/mta"
-	"github.com/binance-chain/tss-lib/ecdsa/keygen"
-	"github.com/binance-chain/tss-lib/tss"
+	"github.com/bnb-chain/tss-lib/v2/common"
+	"github.com/bnb-chain/tss-lib/v2/crypto"
+	cmt "github.com/bnb-chain/tss-lib/v2/crypto/commitments"
+	"github.com/bnb-chain/tss-lib/v2/crypto/mta"
+	"github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
+	"github.com/bnb-chain/tss-lib/v2/tss"
 )
 
 // Implements Party
 // Implements Stringer
-var _ tss.Party = (*LocalParty)(nil)
-var _ fmt.Stringer = (*LocalParty)(nil)
+var (
+	_ tss.Party    = (*LocalParty)(nil)
+	_ fmt.Stringer = (*LocalParty)(nil)
+)
 
 type (
 	LocalParty struct {
@@ -31,11 +33,11 @@ type (
 
 		keys keygen.LocalPartySaveData
 		temp localTempData
-		data common.SignatureData
+		data *common.SignatureData
 
 		// outbound messaging
 		out chan<- tss.Message
-		end chan<- common.SignatureData
+		end chan<- *common.SignatureData
 	}
 
 	localMessageStore struct {
@@ -61,11 +63,13 @@ type (
 		theta,
 		thetaInverse,
 		sigma,
+		keyDerivationDelta,
 		gamma *big.Int
-		cis        []*big.Int
-		bigWs      []*crypto.ECPoint
-		pointGamma *crypto.ECPoint
-		deCommit   cmt.HashDeCommitment
+		fullBytesLen int
+		cis          []*big.Int
+		bigWs        []*crypto.ECPoint
+		pointGamma   *crypto.ECPoint
+		deCommit     cmt.HashDeCommitment
 
 		// round 2
 		betas, // return value of Bob_mid
@@ -90,6 +94,9 @@ type (
 		Ui,
 		Ti *crypto.ECPoint
 		DTelda cmt.HashDeCommitment
+
+		ssidNonce *big.Int
+		ssid      []byte
 	}
 )
 
@@ -98,7 +105,20 @@ func NewLocalParty(
 	params *tss.Parameters,
 	key keygen.LocalPartySaveData,
 	out chan<- tss.Message,
-	end chan<- common.SignatureData,
+	end chan<- *common.SignatureData,
+	fullBytesLen ...int) tss.Party {
+	return NewLocalPartyWithKDD(msg, params, key, nil, out, end, fullBytesLen...)
+}
+
+// NewLocalPartyWithKDD returns a party with key derivation delta for HD support
+func NewLocalPartyWithKDD(
+	msg *big.Int,
+	params *tss.Parameters,
+	key keygen.LocalPartySaveData,
+	keyDerivationDelta *big.Int,
+	out chan<- tss.Message,
+	end chan<- *common.SignatureData,
+	fullBytesLen ...int,
 ) tss.Party {
 	partyCount := len(params.Parties().IDs())
 	p := &LocalParty{
@@ -106,7 +126,7 @@ func NewLocalParty(
 		params:    params,
 		keys:      keygen.BuildLocalSaveDataSubset(key, params.Parties().IDs()),
 		temp:      localTempData{},
-		data:      common.SignatureData{},
+		data:      &common.SignatureData{},
 		out:       out,
 		end:       end,
 	}
@@ -122,7 +142,13 @@ func NewLocalParty(
 	p.temp.signRound8Messages = make([]tss.ParsedMessage, partyCount)
 	p.temp.signRound9Messages = make([]tss.ParsedMessage, partyCount)
 	// temp data init
+	p.temp.keyDerivationDelta = keyDerivationDelta
 	p.temp.m = msg
+	if len(fullBytesLen) > 0 {
+		p.temp.fullBytesLen = fullBytesLen[0]
+	} else {
+		p.temp.fullBytesLen = 0
+	}
 	p.temp.cis = make([]*big.Int, partyCount)
 	p.temp.bigWs = make([]*crypto.ECPoint, partyCount)
 	p.temp.betas = make([]*big.Int, partyCount)
@@ -135,7 +161,7 @@ func NewLocalParty(
 }
 
 func (p *LocalParty) FirstRound() tss.Round {
-	return newRound1(p.params, &p.keys, &p.data, &p.temp, p.out, p.end)
+	return newRound1(p.params, &p.keys, p.data, &p.temp, p.out, p.end)
 }
 
 func (p *LocalParty) Start() *tss.Error {

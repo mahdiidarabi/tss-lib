@@ -16,18 +16,19 @@
 package paillier
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	gmath "math"
 	"math/big"
 	"runtime"
 	"strconv"
-	"time"
 
 	"github.com/otiai10/primes"
 
-	"github.com/binance-chain/tss-lib/common"
-	crypto2 "github.com/binance-chain/tss-lib/crypto"
+	"github.com/bnb-chain/tss-lib/v2/common"
+	crypto2 "github.com/bnb-chain/tss-lib/v2/crypto"
 )
 
 const (
@@ -45,6 +46,7 @@ type (
 		PublicKey
 		LambdaN, // lcm(p-1, q-1)
 		PhiN *big.Int // (p-1) * (q-1)
+		P, Q *big.Int
 	}
 
 	// Proof uses the new GenerateXs method in GG18Spec (6)
@@ -65,7 +67,7 @@ func init() {
 }
 
 // len is the length of the modulus (each prime = len / 2)
-func GenerateKeyPair(modulusBitLen int, timeout time.Duration, optionalConcurrency ...int) (privateKey *PrivateKey, publicKey *PublicKey, err error) {
+func GenerateKeyPair(ctx context.Context, rand io.Reader, modulusBitLen int, optionalConcurrency ...int) (privateKey *PrivateKey, publicKey *PublicKey, err error) {
 	var concurrency int
 	if 0 < len(optionalConcurrency) {
 		if 1 < len(optionalConcurrency) {
@@ -81,7 +83,7 @@ func GenerateKeyPair(modulusBitLen int, timeout time.Duration, optionalConcurren
 	{
 		tmp := new(big.Int)
 		for {
-			sgps, err := common.GetRandomSafePrimesConcurrent(modulusBitLen/2, 2, timeout, concurrency)
+			sgps, err := common.GetRandomSafePrimesConcurrent(ctx, modulusBitLen/2, 2, concurrency, rand)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -103,17 +105,17 @@ func GenerateKeyPair(modulusBitLen int, timeout time.Duration, optionalConcurren
 	lambdaN := new(big.Int).Div(phiN, gcd)
 
 	publicKey = &PublicKey{N: N}
-	privateKey = &PrivateKey{PublicKey: *publicKey, LambdaN: lambdaN, PhiN: phiN}
+	privateKey = &PrivateKey{PublicKey: *publicKey, LambdaN: lambdaN, PhiN: phiN, P: P, Q: Q}
 	return
 }
 
 // ----- //
 
-func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, x *big.Int, err error) {
+func (publicKey *PublicKey) EncryptAndReturnRandomness(rand io.Reader, m *big.Int) (c *big.Int, x *big.Int, err error) {
 	if m.Cmp(zero) == -1 || m.Cmp(publicKey.N) != -1 { // m < 0 || m >= N ?
 		return nil, nil, ErrMessageTooLong
 	}
-	x = common.GetRandomPositiveRelativelyPrimeInt(publicKey.N)
+	x = common.GetRandomPositiveRelativelyPrimeInt(rand, publicKey.N)
 	N2 := publicKey.NSquare()
 	// 1. gamma^m mod N2
 	Gm := new(big.Int).Exp(publicKey.Gamma(), m, N2)
@@ -124,8 +126,8 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 	return
 }
 
-func (publicKey *PublicKey) Encrypt(m *big.Int) (c *big.Int, err error) {
-	c, _, err = publicKey.EncryptAndReturnRandomness(m)
+func (publicKey *PublicKey) Encrypt(rand io.Reader, m *big.Int) (c *big.Int, err error) {
+	c, _, err = publicKey.EncryptAndReturnRandomness(rand, m)
 	return
 }
 
