@@ -39,7 +39,7 @@ func (round *round1) Start() *tss.Error {
 	i := Pi.Index
 
 	// 1. calculate "partial" key share ui
-	// ui := common.GetRandomPositiveInt(round.Params().EC().Params().N)
+	// ui := common.GetRandomPositiveInt(round.PartialKeyRand(), round.EC().Params().N)
 	ui := round.Params().DeterministicU()
 
 	round.temp.ui = ui

@@ -44,7 +44,7 @@ func (round *round1) Start() *tss.Error {
 	round.temp.ssid = ssid
 
 	// 1. calculate "partial" key share ui
-	// ui := common.GetRandomPositiveInt(round.Params().EC().Params().N)
+	// ui := common.GetRandomPositiveInt(round.PartialKeyRand(), round.Params().EC().Params().N)
 	ui := round.Params().DeterministicU()
 
 	round.temp.ui = ui
